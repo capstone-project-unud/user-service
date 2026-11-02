@@ -1,0 +1,12 @@
+FROM golang:1.26-alpine
+ARG AIR_VERSION=v1.67.4
+RUN apk add --no-cache ca-certificates git \
+    && go install github.com/air-verse/air@${AIR_VERSION} \
+    && adduser -D -u 10001 app \
+    && mkdir -p /app/.air /go/pkg/mod /home/app/.cache/go-build \
+    && chown -R app:app /app /go /home/app
+WORKDIR /app
+ENV BIND_HOST=0.0.0.0 PORT=8082 GOCACHE=/home/app/.cache/go-build GOTMPDIR=/app/.air
+USER app
+EXPOSE 8082
+CMD ["air", "-c", ".air.toml"]

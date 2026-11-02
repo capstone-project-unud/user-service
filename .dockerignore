@@ -1,5 +1,6 @@
 .git
 .env*
 bin
+.air
 *.exe
 coverage.out

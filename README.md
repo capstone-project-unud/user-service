@@ -39,3 +39,5 @@ go test ./...
 ```
 
 Alamat lokal menggunakan port 8082. Berkas kredensial `.env` dan hasil kompilasi tidak disertakan dalam repositori.
+
+Pengembangan Docker menggunakan `Dockerfile.dev` dan `.air.toml` untuk menjalankan Air v1.67.4. Perubahan source Go, `go.mod`, atau `go.sum` memicu kompilasi dan pemulaian ulang layanan. Gunakan gabungan `compose.yaml` dan `compose.dev.yaml` pada repositori infrastructure untuk mengaktifkan mode ini.

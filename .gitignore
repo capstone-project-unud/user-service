@@ -2,5 +2,6 @@
 .env.*
 !.env.example
 bin/
+.air/
 *.exe
 coverage.out
