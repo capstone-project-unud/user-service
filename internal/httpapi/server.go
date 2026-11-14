@@ -75,6 +75,7 @@ func New(db store.Store) *fiber.App {
 	users.Get("/audit", s.audit)
 	users.Get("/", s.list)
 	users.Post("/", s.create)
+	users.Patch("/batch-status", s.batchStatus)
 	users.Get("/:id", func(c fiber.Ctx) error {
 		u, e := s.Store.ByID(c.Context(), c.Params("id"))
 		if e != nil {
@@ -273,12 +274,16 @@ func (s *Server) list(c fiber.Ctx) error {
 	if active != "" && active != "active" && active != "inactive" {
 		return fiber.ErrBadRequest
 	}
-	where := " FROM user_service.users WHERE ($1='' OR full_name ILIKE '%'||$1||'%' OR email ILIKE '%'||$1||'%' OR nim ILIKE '%'||$1||'%') AND ($2='' OR $2=ANY(roles)) AND ($3='' OR is_active=($3='active'))"
+	year, _ := strconv.Atoi(c.Query("admission_year"))
+	if year < 1900 || year > 2100 {
+		year = 0
+	}
+	where := " FROM user_service.users WHERE ($1='' OR full_name ILIKE '%'||$1||'%' OR email ILIKE '%'||$1||'%' OR nim ILIKE '%'||$1||'%') AND ($2='' OR $2=ANY(roles)) AND ($3='' OR is_active=($3='active')) AND ($4=0 OR admission_year=$4)"
 	var total int
-	if e := s.Store.DB.QueryRow(c.Context(), "SELECT count(*)"+where, q, role, active).Scan(&total); e != nil {
+	if e := s.Store.DB.QueryRow(c.Context(), "SELECT count(*)"+where, q, role, active, year).Scan(&total); e != nil {
 		return e
 	}
-	rows, e := s.Store.DB.Query(c.Context(), "SELECT "+store.Columns+where+" ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5", q, role, active, limit, (page-1)*limit)
+	rows, e := s.Store.DB.Query(c.Context(), "SELECT "+store.Columns+where+" ORDER BY created_at DESC,id DESC LIMIT $5 OFFSET $6", q, role, active, year, limit, (page-1)*limit)
 	if e != nil {
 		return e
 	}
@@ -383,6 +388,56 @@ func (s *Server) status(c fiber.Ctx) error {
 		return e
 	}
 	return c.SendStatus(204)
+}
+func (s *Server) batchStatus(c fiber.Ctx) error {
+	var in struct {
+		UserIDs  []string `json:"user_ids"`
+		IsActive *bool    `json:"is_active"`
+	}
+	if c.Bind().JSON(&in) != nil || in.IsActive == nil || len(in.UserIDs) == 0 {
+		return fiber.ErrUnprocessableEntity
+	}
+	if len(in.UserIDs) > 500 {
+		return fiber.NewError(400, "Maksimal 500 pengguna per operasi massal.")
+	}
+	ctx := c.Context()
+	tx, e := s.Store.DB.Begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback(ctx)
+
+	actorID := c.Locals("user").(domain.User).ID
+	updatedCount := 0
+
+	for _, uid := range in.UserIDs {
+		if _, e := uuid.Parse(uid); e != nil {
+			continue
+		}
+		var isAdm bool
+		if e := tx.QueryRow(ctx, "SELECT 'ADMIN'=ANY(roles) FROM user_service.users WHERE id=$1", uid).Scan(&isAdm); e != nil {
+			continue
+		}
+		if isAdm {
+			continue
+		}
+		if _, e := tx.Exec(ctx, "UPDATE user_service.users SET is_active=$2, updated_at=now() WHERE id=$1", uid, *in.IsActive); e == nil {
+			updatedCount++
+			if !*in.IsActive {
+				_, _, _ = s.authRequest(ctx, http.MethodDelete, "/internal/sessions/user/"+uid, nil)
+			}
+			action := "USER_DEACTIVATED"
+			if *in.IsActive {
+				action = "USER_ACTIVATED"
+			}
+			_ = store.Audit(ctx, tx, actorID, uid, action)
+		}
+	}
+
+	if e := tx.Commit(ctx); e != nil {
+		return e
+	}
+	return c.JSON(fiber.Map{"updated_count": updatedCount})
 }
 func (s *Server) resetPassword(c fiber.Ctx) error {
 	if _, e := uuid.Parse(c.Params("id")); e != nil {
