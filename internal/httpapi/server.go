@@ -64,6 +64,7 @@ func New(db store.Store) *fiber.App {
 	})
 	internal := app.Group("/internal", s.internal)
 	internal.Get("/users/by-email", s.byEmail)
+	internal.Get("/directory", s.directory)
 	internal.Get("/users/:id", s.byID)
 	internal.Post("/users/:id/login", s.lastLogin)
 	internal.Post("/bootstrap", s.bootstrap)
@@ -267,7 +268,7 @@ func (s *Server) list(c fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 	role := c.Query("role")
-	if role != "" && !domain.HasRole([]string{"ADMIN", "DOSEN", "MAHASISWA", "KOPRODI"}, role) {
+	if role != "" && !domain.HasRole([]string{"ADMIN", "DOSEN", "MAHASISWA", "KOPRODI", "KOORDINATOR_TA", "TU"}, role) {
 		return fiber.ErrBadRequest
 	}
 	active := c.Query("status")
@@ -330,8 +331,8 @@ func (s *Server) update(c fiber.Ctx) error {
 	if e != nil {
 		return e
 	}
-	if domain.HasRole(old.Roles, "ADMIN") {
-		return fiber.NewError(422, "Ubah profil admin melalui halaman Profil saya.")
+	if domain.HasRole(old.Roles, "ADMIN") && !domain.HasRole(in.Roles, "ADMIN") {
+		return fiber.NewError(422, "Peran akun admin tidak dapat dihapus melalui formulir ini.")
 	}
 	u, e := store.Scan(tx.QueryRow(ctx, "UPDATE user_service.users SET full_name=$2,email=$3,roles=$4,nim=$5,admission_year=$6,nip=$7,nidn=$8,phone=$9,expertise=$10,updated_at=now() WHERE id=$1 RETURNING "+store.Columns, old.ID, in.FullName, in.Email, in.Roles, in.NIM, in.AdmissionYear, in.NIP, in.NIDN, in.Phone, in.Expertise))
 	if e != nil {
@@ -400,6 +401,11 @@ func (s *Server) batchStatus(c fiber.Ctx) error {
 	if len(in.UserIDs) > 500 {
 		return fiber.NewError(400, "Maksimal 500 pengguna per operasi massal.")
 	}
+	for _, id := range in.UserIDs {
+		if _, err := uuid.Parse(id); err != nil {
+			return fiber.NewError(422, "Identitas pengguna tidak valid.")
+		}
+	}
 	ctx := c.Context()
 	tx, e := s.Store.DB.Begin(ctx)
 	if e != nil {
@@ -408,6 +414,15 @@ func (s *Server) batchStatus(c fiber.Ctx) error {
 	defer tx.Rollback(ctx)
 
 	actorID := c.Locals("user").(domain.User).ID
+	if !*in.IsActive {
+		var students bool
+		if e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM user_service.users WHERE id=ANY($1::uuid[]) AND 'MAHASISWA'=ANY(roles))", in.UserIDs).Scan(&students); e != nil {
+			return e
+		}
+		if students {
+			return fiber.NewError(422, "Deaktivasi massal mahasiswa memerlukan data kelulusan terverifikasi. Modul kelulusan belum tersedia.")
+		}
+	}
 	updatedCount := 0
 
 	for _, uid := range in.UserIDs {

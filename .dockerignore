@@ -4,3 +4,4 @@ bin
 .air
 *.exe
 coverage.out
+.cache

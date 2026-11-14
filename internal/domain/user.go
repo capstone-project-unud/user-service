@@ -75,12 +75,12 @@ func (in *Input) Validate(create, bootstrap bool) error {
 			return fmt.Errorf("Peran tidak boleh berulang.")
 		}
 		seen[r] = true
-		if r != "MAHASISWA" && r != "DOSEN" && r != "KOPRODI" && !(bootstrap && r == "ADMIN") {
+		if !HasRole([]string{"MAHASISWA", "DOSEN", "KOPRODI", "KOORDINATOR_TA", "TU", "ADMIN"}, r) {
 			return fmt.Errorf("Peran pengguna tidak valid.")
 		}
 	}
-	if len(in.Roles) == 0 || len(in.Roles) > 2 || (seen["MAHASISWA"] && len(in.Roles) != 1) || (seen["KOPRODI"] && !seen["DOSEN"]) {
-		return fmt.Errorf("Pilih Mahasiswa atau Dosen; Koprodi harus juga memiliki peran Dosen.")
+	if len(in.Roles) == 0 || len(in.Roles) > 3 || (seen["MAHASISWA"] && len(in.Roles) != 1) || (seen["ADMIN"] && len(in.Roles) != 1) || (seen["TU"] && len(in.Roles) != 1) || (seen["KOPRODI"] && !seen["DOSEN"]) {
+		return fmt.Errorf("Pilih satu jenis akun. Dosen dapat memiliki peran Koprodi dan/atau Koordinator TA.")
 	}
 	for _, p := range []**string{&in.NIM, &in.NIP, &in.NIDN} {
 		if *p != nil {
