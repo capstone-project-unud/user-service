@@ -75,7 +75,7 @@ func (in *Input) Validate(create, bootstrap bool) error {
 			return fmt.Errorf("Peran tidak boleh berulang.")
 		}
 		seen[r] = true
-		if !HasRole([]string{"MAHASISWA", "DOSEN", "KOPRODI", "KOORDINATOR_TA", "TU", "ADMIN"}, r) {
+		if !HasRole([]string{"MAHASISWA", "DOSEN", "KOORDINATOR_TA", "TU", "ADMIN"}, r) {
 			return fmt.Errorf("Peran pengguna tidak valid.")
 		}
 	}

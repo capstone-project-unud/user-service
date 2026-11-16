@@ -268,7 +268,7 @@ func (s *Server) list(c fiber.Ctx) error {
 		return fiber.ErrBadRequest
 	}
 	role := c.Query("role")
-	if role != "" && !domain.HasRole([]string{"ADMIN", "DOSEN", "MAHASISWA", "KOPRODI", "KOORDINATOR_TA", "TU"}, role) {
+	if role != "" && !domain.HasRole([]string{"ADMIN", "DOSEN", "MAHASISWA", "KOORDINATOR_TA", "TU"}, role) {
 		return fiber.ErrBadRequest
 	}
 	active := c.Query("status")
