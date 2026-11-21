@@ -5,6 +5,7 @@ import (
 	"context"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"strings"
 )
 
 const Columns = "id,full_name,email,roles,is_active,nim,admission_year,nip,nidn,phone,expertise,study_program,last_login_at,created_at,updated_at"
@@ -21,6 +22,25 @@ func (s Store) ByID(ctx context.Context, id string) (domain.User, error) {
 }
 func (s Store) ByEmail(ctx context.Context, email string) (domain.User, error) {
 	return Scan(s.DB.QueryRow(ctx, "SELECT "+Columns+" FROM user_service.users WHERE lower(email)=$1", email))
+}
+func (s Store) ByLoginIdentifier(ctx context.Context, raw string) (domain.User, error) {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return domain.User{}, pgx.ErrNoRows
+	}
+	if strings.Contains(id, "@") {
+		return s.ByEmail(ctx, domain.NormalizeEmail(id))
+	}
+	compact := strings.ReplaceAll(id, " ", "")
+	return Scan(s.DB.QueryRow(ctx, `
+		SELECT `+Columns+`
+		FROM user_service.users
+		WHERE nim=$1 OR nip=$1 OR nidn=$1
+		   OR replace(coalesce(nip,''),' ','')=$2
+		   OR replace(coalesce(nidn,''),' ','')=$2
+		   OR lower(email)=lower($1)
+		ORDER BY CASE WHEN nim=$1 THEN 1 WHEN nip=$1 THEN 2 WHEN nidn=$1 THEN 3 ELSE 4 END
+		LIMIT 1`, id, compact))
 }
 func Audit(ctx context.Context, tx pgx.Tx, actor, target, action string) error {
 	var a any

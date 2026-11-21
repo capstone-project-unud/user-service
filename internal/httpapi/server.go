@@ -64,6 +64,7 @@ func New(db store.Store) *fiber.App {
 	})
 	internal := app.Group("/internal", s.internal)
 	internal.Get("/users/by-email", s.byEmail)
+	internal.Get("/users/by-identifier", s.byIdentifier)
 	internal.Get("/directory", s.directory)
 	internal.Get("/users/:id", s.byID)
 	internal.Post("/users/:id/login", s.lastLogin)
@@ -166,6 +167,13 @@ func (s *Server) byEmail(c fiber.Ctx) error {
 	}
 	return c.JSON(u)
 }
+func (s *Server) byIdentifier(c fiber.Ctx) error {
+	u, e := s.Store.ByLoginIdentifier(c.Context(), c.Query("q"))
+	if e != nil {
+		return e
+	}
+	return c.JSON(u)
+}
 func (s *Server) byID(c fiber.Ctx) error {
 	if _, e := uuid.Parse(c.Params("id")); e != nil {
 		return fiber.ErrBadRequest
@@ -263,12 +271,19 @@ func (s *Server) list(c fiber.Ctx) error {
 		page = 100000
 	}
 	limit := 12
+	if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > 1000 {
+			return fiber.ErrBadRequest
+		}
+		limit = parsedLimit
+	}
 	q := strings.TrimSpace(c.Query("q"))
 	if len(q) > 150 {
 		return fiber.ErrBadRequest
 	}
 	role := c.Query("role")
-	if role != "" && !domain.HasRole([]string{"ADMIN", "DOSEN", "MAHASISWA", "KOORDINATOR_TA", "TU"}, role) {
+	if role != "" && !domain.HasRole([]string{"ADMIN", "DOSEN", "MAHASISWA", "KOORDINATOR_TA", "TU", "KOPRODI"}, role) {
 		return fiber.ErrBadRequest
 	}
 	active := c.Query("status")
@@ -279,7 +294,7 @@ func (s *Server) list(c fiber.Ctx) error {
 	if year < 1900 || year > 2100 {
 		year = 0
 	}
-	where := " FROM user_service.users WHERE ($1='' OR full_name ILIKE '%'||$1||'%' OR email ILIKE '%'||$1||'%' OR nim ILIKE '%'||$1||'%') AND ($2='' OR $2=ANY(roles)) AND ($3='' OR is_active=($3='active')) AND ($4=0 OR admission_year=$4)"
+	where := " FROM user_service.users WHERE ($1='' OR full_name ILIKE '%'||$1||'%' OR email ILIKE '%'||$1||'%' OR nim ILIKE '%'||$1||'%' OR nip ILIKE '%'||$1||'%' OR nidn ILIKE '%'||$1||'%') AND ($2='' OR ($2=ANY(roles) AND ($2<>'DOSEN' OR NOT ('KOORDINATOR_TA'=ANY(roles))))) AND ($3='' OR is_active=($3='active')) AND ($4=0 OR admission_year=$4)"
 	var total int
 	if e := s.Store.DB.QueryRow(c.Context(), "SELECT count(*)"+where, q, role, active, year).Scan(&total); e != nil {
 		return e
@@ -303,12 +318,58 @@ func (s *Server) list(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": items, "total": total, "page": page, "limit": limit})
 }
 func (s *Server) stats(c fiber.Ctx) error {
-	var total, active, students, lecturers int
-	e := s.Store.DB.QueryRow(c.Context(), "SELECT count(*),count(*) FILTER(WHERE is_active),count(*) FILTER(WHERE 'MAHASISWA'=ANY(roles)),count(*) FILTER(WHERE 'DOSEN'=ANY(roles)) FROM user_service.users").Scan(&total, &active, &students, &lecturers)
+	var total, active, students, lecturers, lecturersOnly, coordinators, tu, admins int
+	e := s.Store.DB.QueryRow(c.Context(), `
+		SELECT count(*),
+		       count(*) FILTER(WHERE is_active),
+		       count(*) FILTER(WHERE 'MAHASISWA'=ANY(roles)),
+		       count(*) FILTER(WHERE 'DOSEN'=ANY(roles)),
+		       count(*) FILTER(WHERE 'DOSEN'=ANY(roles) AND NOT ('KOORDINATOR_TA'=ANY(roles))),
+		       count(*) FILTER(WHERE 'KOORDINATOR_TA'=ANY(roles)),
+		       count(*) FILTER(WHERE 'TU'=ANY(roles)),
+		       count(*) FILTER(WHERE 'ADMIN'=ANY(roles))
+		FROM user_service.users`).Scan(&total, &active, &students, &lecturers, &lecturersOnly, &coordinators, &tu, &admins)
 	if e != nil {
 		return e
 	}
-	return c.JSON(fiber.Map{"total": total, "active": active, "students": students, "lecturers": lecturers})
+	type cohortStat struct {
+		Year   int `json:"year"`
+		Total  int `json:"total"`
+		Active int `json:"active"`
+	}
+	cohorts := []cohortStat{}
+	rows, e := s.Store.DB.Query(c.Context(), `
+		SELECT admission_year, count(*), count(*) FILTER(WHERE is_active)
+		FROM user_service.users
+		WHERE 'MAHASISWA'=ANY(roles) AND admission_year IS NOT NULL
+		GROUP BY admission_year
+		ORDER BY admission_year ASC`)
+	if e != nil {
+		return e
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row cohortStat
+		if e = rows.Scan(&row.Year, &row.Total, &row.Active); e != nil {
+			return e
+		}
+		cohorts = append(cohorts, row)
+	}
+	if e = rows.Err(); e != nil {
+		return e
+	}
+	return c.JSON(fiber.Map{
+		"total":          total,
+		"active":         active,
+		"inactive":       total - active,
+		"students":       students,
+		"lecturers":      lecturers,
+		"lecturers_only": lecturersOnly,
+		"coordinators":   coordinators,
+		"tu":             tu,
+		"admins":         admins,
+		"cohorts":        cohorts,
+	})
 }
 func (s *Server) update(c fiber.Ctx) error {
 	if _, e := uuid.Parse(c.Params("id")); e != nil {
@@ -415,12 +476,32 @@ func (s *Server) batchStatus(c fiber.Ctx) error {
 
 	actorID := c.Locals("user").(domain.User).ID
 	if !*in.IsActive {
-		var students bool
-		if e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM user_service.users WHERE id=ANY($1::uuid[]) AND 'MAHASISWA'=ANY(roles))", in.UserIDs).Scan(&students); e != nil {
+		var ungraduated bool
+		var hasFinalExam bool
+		if e = tx.QueryRow(ctx, `SELECT to_regclass('capstone_service.final_exams') IS NOT NULL`).Scan(&hasFinalExam); e != nil {
 			return e
 		}
-		if students {
-			return fiber.NewError(422, "Deaktivasi massal mahasiswa memerlukan data kelulusan terverifikasi. Modul kelulusan belum tersedia.")
+		if hasFinalExam {
+			if e = tx.QueryRow(ctx, `
+				SELECT EXISTS(
+					SELECT 1 FROM user_service.users u
+					WHERE u.id = ANY($1::uuid[]) AND 'MAHASISWA'=ANY(u.roles)
+					  AND NOT EXISTS(
+						SELECT 1 FROM capstone_service.project_students ps
+						JOIN capstone_service.final_exams fe ON fe.project_id=ps.project_id
+						WHERE ps.student_id=u.id AND fe.status='PASSED'
+						  AND NOT EXISTS(SELECT 1 FROM capstone_service.seminar_revision_items ri WHERE ri.project_id=fe.project_id AND ri.stage='FINAL_EXAM' AND ri.status <> 'APPROVED')
+					  )
+				)`, in.UserIDs).Scan(&ungraduated); e != nil {
+				return e
+			}
+		} else {
+			if e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM user_service.users WHERE id=ANY($1::uuid[]) AND 'MAHASISWA'=ANY(roles))", in.UserIDs).Scan(&ungraduated); e != nil {
+				return e
+			}
+		}
+		if ungraduated {
+			return fiber.NewError(422, "Deaktivasi massal mahasiswa memerlukan kelulusan Ujian Akhir dan penyelesaian revisi terverifikasi untuk seluruh mahasiswa terpilih.")
 		}
 	}
 	updatedCount := 0
