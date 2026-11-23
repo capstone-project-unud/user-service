@@ -2,7 +2,10 @@ CREATE TABLE IF NOT EXISTS user_service.users (
   id uuid PRIMARY KEY,
   full_name varchar(150) NOT NULL,
   email varchar(254) NOT NULL,
-  roles text[] NOT NULL CHECK (cardinality(roles) > 0 AND roles <@ ARRAY['ADMIN','DOSEN','MAHASISWA','KOPRODI']::text[]),
+  roles text[] NOT NULL CHECK (
+    cardinality(roles) > 0
+    AND roles <@ ARRAY['ADMIN','DOSEN','MAHASISWA','KOORDINATOR_TA','TU','KOPRODI']::text[]
+  ),
   is_active boolean NOT NULL DEFAULT true,
   nim varchar(30) UNIQUE,
   admission_year smallint,
@@ -18,7 +21,9 @@ CREATE TABLE IF NOT EXISTS user_service.users (
   CHECK (NOT ('KOPRODI' = ANY(roles)) OR 'DOSEN' = ANY(roles)),
   CHECK (NOT ('MAHASISWA' = ANY(roles) AND 'DOSEN' = ANY(roles)))
 );
+
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower ON user_service.users(lower(email));
+
 CREATE TABLE IF NOT EXISTS user_service.audit_logs (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   actor_id uuid,
