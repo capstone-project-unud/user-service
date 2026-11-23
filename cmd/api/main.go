@@ -28,7 +28,8 @@ func main() {
 	if err != nil {
 		log.Fatal("Invalid database configuration")
 	}
-	pc.MaxConns = 5
+	pc.MaxConns = 12
+	pc.MinConns = 2
 	db, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		log.Fatal("Cannot initialize database")

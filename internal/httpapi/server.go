@@ -30,7 +30,8 @@ type Server struct {
 }
 
 func New(db store.Store) *fiber.App {
-	s := &Server{Store: db, Client: &http.Client{Timeout: 8 * time.Second}, AuthURL: strings.TrimRight(os.Getenv("AUTH_SERVICE_URL"), "/"), AuthToken: os.Getenv("AUTH_INTERNAL_TOKEN"), InternalToken: os.Getenv("USER_INTERNAL_TOKEN")}
+	transport := &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 32, IdleConnTimeout: 90 * time.Second}
+	s := &Server{Store: db, Client: &http.Client{Timeout: 8 * time.Second, Transport: transport}, AuthURL: strings.TrimRight(os.Getenv("AUTH_SERVICE_URL"), "/"), AuthToken: os.Getenv("AUTH_INTERNAL_TOKEN"), InternalToken: os.Getenv("USER_INTERNAL_TOKEN")}
 	app := fiber.New(fiber.Config{AppName: "capstone-users", BodyLimit: 32 * 1024, ReadTimeout: 10 * time.Second, WriteTimeout: 20 * time.Second, ErrorHandler: func(c fiber.Ctx, e error) error {
 		code := 500
 		message := "Layanan pengguna mengalami gangguan."
